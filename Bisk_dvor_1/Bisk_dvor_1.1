@@ -1,0 +1,305 @@
+/*
+ * Created by SharpDevelop.
+ * User: user
+ * Date: 29.03.2019
+ * Time: 15:23
+ * 
+ * To change this template use Tools | Options | Coding | Edit Standard Headers.
+ */
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Windows.Forms;
+using System.IO;
+using System.Text;
+using OmronFinsTCP.Net;
+using System.Threading;
+
+namespace Bisk_dvor2
+{
+    /// <summary>
+    /// Description of MainForm.
+    /// </summary>
+    public partial class MainForm : Form
+    {
+        public int[,] textcode = new int[2000, 40];//хранит массивы символов для каждой строки
+        public byte[,] Buf = new byte[2000, 100];//хранит массивы символов для каждой строки
+
+        public MainForm()
+        {
+            //
+            // The InitializeComponent() call is required for Windows Forms designer support.
+            //
+            InitializeComponent();
+
+
+            //
+            // TODO: Add constructor code after the InitializeComponent() call.
+            //
+        }
+        void Button1Click(object sender, EventArgs e)
+        {
+
+
+            if (openFileDialog1.ShowDialog() == DialogResult.OK)
+            {
+                textBox1.Text = openFileDialog1.FileName;
+            }
+
+            var stread = new StreamReader(textBox1.Text, Encoding.Default);
+            string[] sr_arr = stread.ReadToEnd().Split('\n');
+
+            listView1.Columns.Add("Имя", 200, HorizontalAlignment.Left);
+            listView1.Columns.Add("Количество,кг", 200, HorizontalAlignment.Left);
+            listView1.Columns.Add("Код", 200, HorizontalAlignment.Left);
+            listView1.Update();
+            listView1.View = View.Details;
+
+            var dwn1 = new DownloaderToView(textBox1.Text, listView1);
+            var arh1 = new ArrayHandler(dwn1);
+            arh1.ReadAndDownloadToView();
+            arh1.MakeArray();
+        }
+
+        void Button2Click(object sender, EventArgs e)
+        {
+            var dwn2 = new DownloaderToView(textBox1.Text, listView1);
+            var arh2 = new ArrayHandler(dwn2);
+            arh2.ReadAndDownloadToView();
+            var dwn_plc = new DownloaderToPLC("192.168.250.1", arh2.MakeArray(), progressBar1, listView1);
+            dwn_plc.Download();
+        }
+    }
+
+    public class DownloaderToView : IMakerArray
+    {
+        public string TextFile { get; set; }
+        ListView LView { get; set; }
+        private string[] _sr_arr = new string[2000];
+        byte[,] Buf = new byte[2000, 100];//хранит массивы символов для каждой строки
+        public DownloaderToView(string txtfile, ListView lview)//конструктор
+        {
+            TextFile = txtfile ?? throw new ArgumentNullException(txtfile, $"Path is null {txtfile}");
+           // MessageBox.Show(TextFile);
+            LView = lview;
+        }
+
+        private string[] TXTtoArr(string txf)//получаем ссылку на файл и преобразуем его в массив.
+        {
+            var stread = new StreamReader(txf, Encoding.Default);
+            _sr_arr = stread.ReadToEnd().Split('\n');
+            return _sr_arr;
+        }
+
+        public void DataToView()//метод наполняет listview строчками из массива файла
+        {
+            string[] ftext = new string[2000];
+            ftext = TXTtoArr(TextFile);//вызываем метод для преобразования файла в массив
+            string[] arr = new string[5];
+            int c = 0, count = 0;
+
+            for (int j = 0; j <= ftext.Length - 2; j = j + 55)
+            {
+                arr[0] = ""; arr[1] = ""; arr[2] = "";//оставляем пустую строчку перед и после каждого рецепта
+                LView.Items.Add(new ListViewItem(arr));
+                for (int i = 0; i <= 54; i++)
+                {
+                    if ((ftext[i + j].TrimEnd('\r') != "0") || ((ftext[i + j].TrimEnd('\r') == "0") && ((ftext[i + j - 1].TrimEnd('\r') == "Вода") || (ftext[i + j - 1].TrimEnd('\r') == "Температура воды"))))
+                    {
+                        if (i == 52 || i == 54)
+                        {
+                            arr[c] = ftext[i + j];
+                            c = c + 2;
+                            arr[c] = "";
+                        }
+                        if (i == 0)
+                        {
+                            arr[c] = ftext[i + j];
+                            c = c + 1;
+                        }
+
+                        else
+                        {
+                            arr[c] = ftext[i + j];
+                            c = c + 1;
+                        }
+
+                        if (c > 2)
+                        {
+                            count = count + 1;
+                            c = 0;
+                            if (i > 2)
+                            {
+                                LView.Items.Add(new ListViewItem(arr));
+                            }
+                            else
+                            {
+                                LView.Items.Add(new ListViewItem(arr));
+                            }
+                        }
+
+                    }
+
+                }
+            }
+        }
+
+        public byte[,] MakeArray()//преобразуем каждую строчку текста в массив кодов
+        {
+            byte[] bufarr = new byte[16];//промежуточный буфер массива символов
+
+            for (int i = 0; i <= LView.Items.Count - 1; i++)
+            {
+                //MessageBox.Show(Convert.ToString(listView1.Items.Count));
+                bufarr = Encoding.Default.GetBytes(LView.Items[i].SubItems[0].Text);
+
+                for (int j = 0; j <= bufarr.Length - 1; j = j + 1)
+                {
+                    //MessageBox.Show(Convert.ToString(bufarr[j]));
+                    Buf[i, j] = bufarr[j];
+                }
+            }
+            return Buf;
+
+        }
+
+    }
+
+    public class DownloaderToPLC : IDownloaderData
+    {
+        public string IP { get; set; }
+        ProgressBar PRGBar;
+        ListView LTView;
+        byte[,] BUF = new byte[2000, 100];
+
+
+       public DownloaderToPLC(string ip, byte[,] buf, ProgressBar progressBar, ListView listView)
+        {
+            IP = ip;
+            PRGBar = progressBar;
+            LTView = listView;
+            BUF = buf;
+        }
+
+        public void Download()
+        {
+            byte[] bufarr = new byte[16];
+            short dt1 = 0;
+            int y = 0;
+            short i = 0, redat = 0;
+            int ch = 0;//переменная подсчета строк в каждом рецепте
+            var plc = new EtherNetPLC();
+            plc.Link(IP, 9600, 300);
+            PRGBar.Maximum = LTView.Items.Count;
+            PRGBar.Visible = true;
+            plc.ReadWord(PlcMemory.DM, 99, out redat);
+            if (redat == 0)
+            {
+                for (int j = 0; j <= LTView.Items.Count - 1; j = j + 1)//обход по строкам listview
+                {
+
+                    if (BUF[j, 0] == 0) //проверка на ненулевую строку(строка-разделитель), если нулевая, то не заходим в цикл
+                    {
+                        ch = 0;
+                    }
+                    else
+                    {
+                        for (i = 0; i <= 15; i = (short)(i + 2))//ходим по симовалм в строке, через два, т.к. в одной итерации учит.2 символа.
+                        {
+                            //проверка на "Вода"
+                            if (i == 0 && (BUF[j, i]) == 194 && (BUF[j, i + 1]) == 238 && (BUF[j, i + 2]) == 228 && (BUF[j, i + 3]) == 224)
+                            {
+                                dt1 = (short)(dt1 + (((17 - ch)) * 10));
+                                plc.WriteWord(PlcMemory.DM, (short)(100 + dt1 + (8 + (j * 10 - 10))), (short)(Convert.ToInt32(LTView.Items[j].SubItems[1].Text) - 32000));
+                                plc.WriteWord(PlcMemory.DM, (short)(100 + dt1 + (8 + ((j + 1) * 10 - 10))), (short)(Convert.ToInt32(LTView.Items[j + 1].SubItems[1].Text) - 32000));
+                                j = j + 1;
+                                break;
+                            }
+                            else
+                            {
+                                y = ((BUF[j, i] * 256) + (BUF[j, i + 1]));
+                                if ((y >= 32768))
+                                {
+                                    plc.WriteWord(PlcMemory.DM, (short)(100 + dt1 + (i / 2 + (j * 10 - 10))), (short)(y - 65536));
+                                }
+                                else
+                                {
+                                    plc.WriteWord(PlcMemory.DM, (short)(100 + dt1 + (i / 2 + (j * 10 - 10))), (short)(y));
+                                }
+                            }
+                            if (BUF[j, 0] != 0 && i == 14)
+                            {
+                                plc.WriteWord(PlcMemory.DM, (short)(100 + dt1 + (8 + (j * 10 - 10))), (short)(Convert.ToInt32(LTView.Items[j].SubItems[1].Text) - 32000));
+                            }
+
+                        }
+                    }
+                    PRGBar.Value++;
+                    if (BUF[j, 0] != 0) { ch = ch + 1; }
+                }
+                plc.WriteWord(PlcMemory.DM, 99, 1);
+                plc.Close();
+                MessageBox.Show("Загрузка успешно завершена!", "Системное сообщение", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                PRGBar.Visible = false;
+                PRGBar.Value = 0;
+            }
+            else
+            {
+                MessageBox.Show("Загрузка невозможна. Присутствуют незавершенные операции!", "Системное сообщение", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+    }
+
+    public class ArrayHandler
+    {
+        private readonly IMakerArray _makearray;
+
+        public ArrayHandler(IMakerArray makerarray)
+        {
+            _makearray = makerarray;
+        }
+
+        public void ReadAndDownloadToView()
+        {
+            _makearray.DataToView();
+        }
+
+        public byte[,] MakeArray()
+        {
+           return _makearray.MakeArray();
+        }
+    }
+
+    public class PLC
+    {
+        private readonly IDownloaderData _downloader;
+
+        public PLC(IDownloaderData downloader)
+        {
+            _downloader = downloader;
+        }
+
+        public void DownloadData()
+         {
+            _downloader.Download();
+         }
+    }
+
+
+    public interface IMakerArray
+    {
+        string TextFile { get; set; }
+        void DataToView();//метод наполняет listview строчками из массива файла
+        byte[,] MakeArray();//преобразуем каждую строчку текста в массив кодов
+    }
+
+    public interface IDownloaderData
+    {
+        string IP { set; }
+        void Download();//метод передает массив кодов в ячейки памяти PLC
+
+    }
+
+}
+	
+	
